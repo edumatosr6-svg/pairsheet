@@ -1,0 +1,31 @@
+services:
+  simas:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_ORIGIN: https://${DOMAIN:?Defina DOMAIN}
+      SETUP_TOKEN: ${SETUP_TOKEN:?Defina SETUP_TOKEN}
+      DATABASE_PATH: /app/data/simas.sqlite
+    volumes:
+      - simas-data:/app/data
+    expose:
+      - '3000'
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Defina DOMAIN}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - simas
+volumes:
+  simas-data:
+  caddy-data:
+  caddy-config:

@@ -1,4 +1,5 @@
 "use client";
+import {Login,UserAccountForm,PasswordForm} from "./account";
 import { useState, useEffect } from "react";
 import {
   CalendarDays,
@@ -452,9 +453,9 @@ export default function Simas() {
               <strong>{user?.name ?? "Minha conta"}</strong>
               <small>{admin ? "Administrador" : "Consulta"}</small>
             </div>
-            <a aria-label="Sair" href="/signout-with-chatgpt?return_to=/">
+            <button aria-label="Sair" onClick={async()=>{await fetch("/api/auth/logout",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});setUser(null);setState(blankState());setUsers([]);setAuth(true);setModal(null);}}>
               <LogOut size={17} />
-            </a>
+            </button>
           </div>
         </div>
       </aside>
@@ -568,21 +569,7 @@ export default function Simas() {
               <h3>Preparando sua equipe…</h3>
             </div>
           ) : auth ? (
-            <div className="login panel">
-              <div className="brand-mark">
-                <Users size={30} />
-              </div>
-              <h2>Bem-vindo ao SIMAS</h2>
-              <p>Entre para consultar e organizar as escalas da sua equipe.</p>
-              <a
-                className="button primary"
-                href="/signin-with-chatgpt?return_to=/"
-                target="_top"
-              >
-                Entrar com ChatGPT <ArrowRight size={17} />
-              </a>
-              <small>Um acesso seguro para cuidar de toda a escala.</small>
-            </div>
+            <Login onSuccess={load}/>
           ) : !user ? (
             <div className="empty panel">
               <h3>Não foi possível carregar o SIMAS</h3>
@@ -1291,7 +1278,7 @@ export default function Simas() {
                     <section className="panel pair-report">
                       <div className="section-heading">
                         <div>
-                          <h2>Acessos da equipe</h2>
+                          <h2>Acessos da equipe</h2><button className="text-button" onClick={()=>setModal({type:"user"})}>Criar acesso <Plus size={16}/></button>
                           <p>
                             Administradores gerenciam; usuários de consulta
                             visualizam.
@@ -1302,7 +1289,7 @@ export default function Simas() {
                         <div className="pair-row" key={u.id}>
                           <div>
                             <strong>{u.name}</strong>
-                            <small>{u.email}</small>
+                            <small>{u.email}</small><button className="text-button" onClick={()=>setModal({type:"password",person:u.id})}>Redefinir senha</button>
                           </div>
                           <select
                             aria-label={"Perfil de " + u.name}
@@ -1322,8 +1309,7 @@ export default function Simas() {
                         </div>
                       ))}
                       <p className="setting-note">
-                        O site está privado. Novos usuários recebem perfil de
-                        consulta quando o acesso ao site é autorizado.
+                        Crie uma conta para cada pessoa da equipe. O login funciona com e-mail e senha, em qualquer navegador.
                       </p>
                     </section>
                   )}
@@ -1361,6 +1347,8 @@ export default function Simas() {
                   {
                     (
                       {
+                        user: "Criar acesso",
+                        password: "Redefinir senha",
                         employee: modal.employee
                           ? "Editar funcionário"
                           : "Novo funcionário",
@@ -1394,6 +1382,8 @@ export default function Simas() {
                 {error}
               </div>
             )}
+            {modal.type === "user" && <UserAccountForm onSuccess={()=>{setModal(null);load();setNotice("Acesso criado com sucesso.");}}/>}
+            {modal.type === "password" && <PasswordForm id={modal.person!} onSuccess={()=>{setModal(null);load();setNotice("Senha atualizada.");}}/>}
             {modal.type === "employee" && (
               <form
                 onSubmit={(e) => {

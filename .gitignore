@@ -45,3 +45,6 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+
+/data/
+!.env.example

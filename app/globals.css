@@ -1918,3 +1918,5 @@ legend,
     break-inside: avoid;
   }
 }
+
+.login-form{width:100%;max-width:360px;text-align:left}.login-form .button{width:100%;margin-top:12px}.profile>button{margin-left:auto;color:#8b979d}
