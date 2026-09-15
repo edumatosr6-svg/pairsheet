@@ -15,7 +15,7 @@ test('Vercel API keeps accounts and schedule state in the database', async () =>
   process.env.TURSO_AUTH_TOKEN = 'local-test';
   process.env.SETUP_TOKEN = randomBytes(32).toString('hex');
   const outfile = join(dir, 'api.mjs');
-  await build({ entryPoints: ['api/index.ts'], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node24', packages: 'external' });
+  await build({ entryPoints: ['server/vercel-api.ts'], outfile, bundle: true, platform: 'node', format: 'esm', target: 'node24', packages: 'external' });
   const { default: handler, closeDatabaseForTests } = await import(pathToFileURL(outfile).href);
   const server = createServer(handler);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

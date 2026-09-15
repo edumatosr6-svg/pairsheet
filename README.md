@@ -2,7 +2,7 @@
 
 ## Publicar o SIMAS na Vercel
 
-Este repositório inclui `vercel.json` e `api/index.ts`. A Vercel executa `npm run build`, serve a interface de `dist/web` e encaminha `/api/*` para a função que usa Turso. A versão Docker continua usando o SQLite local.
+Este repositório inclui `vercel.json` e `server/vercel-api.ts`. `npm run build` gera a função `api/index.mjs`; a Vercel serve a interface de `dist/web` e encaminha `/api/*` para essa função, que usa Turso. A versão Docker continua usando o SQLite local.
 
 1. Crie uma conta gratuita em [Turso](https://turso.tech/) e um banco chamado `simas`.
 2. Copie a URL do banco e crie um token de acesso ao banco.
