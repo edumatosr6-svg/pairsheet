@@ -383,6 +383,7 @@ function initialize() {
 var fields = "id,email,name,role";
 var hash = (value) => createHash("sha256").update(value).digest("hex");
 var credentials = z2.object({ email: z2.string().trim().email().max(200).transform((x) => x.toLowerCase()), password: z2.string().min(12).max(128) });
+var accessPassword = z2.object({ password: z2.string().min(12).max(128) });
 async function passwordHash(password) {
   const salt = randomBytes(16).toString("hex");
   return salt + ":" + (await scrypt(password, salt, 64)).toString("hex");
@@ -409,9 +410,6 @@ function json(res, status, data) {
 async function one(sql, args = []) {
   return (await db.execute({ sql, args })).rows[0];
 }
-async function all(sql, args = []) {
-  return (await db.execute({ sql, args })).rows;
-}
 async function run(sql, args = []) {
   return db.execute({ sql, args });
 }
@@ -431,7 +429,7 @@ async function readState() {
 }
 async function snapshot(user) {
   const row = await readState();
-  return { state: JSON.parse(row.data), revision: row.revision, user, users: user.role === "admin" ? await all(`SELECT ${fields} FROM users ORDER BY name`) : [] };
+  return { state: JSON.parse(row.data), revision: row.revision, user };
 }
 async function body(req) {
   let size = 0;
@@ -488,17 +486,18 @@ async function handler(req, res) {
     if (path === "/api/auth/status" && req.method === "GET") return json(res, 200, { needsSetup: !await one("SELECT id FROM users LIMIT 1") });
     if (["/api/auth/login", "/api/auth/setup"].includes(path) && req.method === "POST") {
       const input = await body(req);
-      const parsed = credentials.parse(input);
+      const parsed = path.endsWith("/setup") ? credentials.parse(input) : accessPassword.parse(input);
       const peer = String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress).split(",")[0].trim();
-      const key = hash("email:" + parsed.email);
-      if (!await allowedAttempt(key) || !await allowedAttempt(hash("ip:" + peer))) return json(res, 429, { error: "Muitas tentativas. Aguarde 15 minutos e tente novamente." });
+      const key = hash("ip:" + peer);
+      if (!await allowedAttempt(key)) return json(res, 429, { error: "Muitas tentativas. Aguarde 15 minutos e tente novamente." });
       if (path.endsWith("/setup")) {
         if (hash(String(input.token ?? "")) !== hash(setupToken)) return json(res, 403, { error: "C\xF3digo de instala\xE7\xE3o inv\xE1lido." });
+        const setup = credentials.parse(input);
         const name = z2.string().trim().min(2).max(100).parse(input.name);
-        const password = await passwordHash(parsed.password);
+        const password = await passwordHash(setup.password);
         const user3 = await transaction(async (tx) => {
           if ((await tx.execute("SELECT id FROM users LIMIT 1")).rows.length) throw Error("A instala\xE7\xE3o j\xE1 foi conclu\xEDda. Entre com sua conta.");
-          const user4 = { id: randomUUID(), email: parsed.email, name, role: "admin" };
+          const user4 = { id: randomUUID(), email: setup.email, name, role: "admin" };
           await tx.execute({ sql: "INSERT INTO users VALUES (?,?,?,?,?)", args: [user4.id, user4.email, user4.name, user4.role, password] });
           await tx.execute({ sql: "INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)", args: [user4.id, "Administrador inicial criado", (/* @__PURE__ */ new Date()).toISOString()] });
           return user4;
@@ -506,9 +505,9 @@ async function handler(req, res) {
         await session(res, user3);
         return json(res, 201, { ok: true });
       }
-      const user2 = await one("SELECT * FROM users WHERE email=?", [parsed.email]);
+      const user2 = await one("SELECT * FROM users WHERE role='admin' LIMIT 1");
       const valid = await passwordMatches(parsed.password, user2?.password_hash ?? "00000000000000000000000000000000:" + "00".repeat(64));
-      if (!user2 || !valid) return json(res, 401, { error: "E-mail ou senha incorretos." });
+      if (!user2 || !valid) return json(res, 401, { error: "Senha incorreta." });
       await run("DELETE FROM login_limits WHERE key=?", [key]);
       await session(res, user2);
       return json(res, 200, { ok: true });
@@ -523,25 +522,13 @@ async function handler(req, res) {
     if (path === "/api/state" && req.method === "GET") return json(res, 200, await snapshot(user));
     if (req.method !== "POST") return json(res, 404, { error: "P\xE1gina n\xE3o encontrada." });
     if (user.role !== "admin") return json(res, 403, { error: "Somente administradores podem alterar a escala." });
-    if (path === "/api/users") {
-      const input = await body(req);
-      const parsed = credentials.extend({ name: z2.string().trim().min(2).max(100), role: z2.enum(["admin", "viewer"]) }).parse(input);
-      const pw = await passwordHash(parsed.password);
-      await transaction(async (tx) => {
-        if ((await tx.execute({ sql: "SELECT id FROM users WHERE email=?", args: [parsed.email] })).rows.length) throw Error("J\xE1 existe uma conta com esse e-mail.");
-        await tx.execute({ sql: "INSERT INTO users VALUES (?,?,?,?,?)", args: [randomUUID(), parsed.email, parsed.name, parsed.role, pw] });
-        await tx.execute({ sql: "INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)", args: [user.id, "Conta criada: " + parsed.email, (/* @__PURE__ */ new Date()).toISOString()] });
-      });
-      return json(res, 201, await snapshot(user));
-    }
-    if (path === "/api/users/password") {
-      const input = z2.object({ id: z2.string(), password: z2.string().min(12).max(128) }).parse(await body(req));
+    if (path === "/api/access/password") {
+      const input = accessPassword.parse(await body(req));
       const pw = await passwordHash(input.password);
       await transaction(async (tx) => {
-        if (!(await tx.execute({ sql: "SELECT id FROM users WHERE id=?", args: [input.id] })).rows.length) throw Error("Conta n\xE3o encontrada.");
-        await tx.execute({ sql: "UPDATE users SET password_hash=? WHERE id=?", args: [pw, input.id] });
-        await tx.execute({ sql: "DELETE FROM sessions WHERE user_id=?", args: [input.id] });
-        await tx.execute({ sql: "INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)", args: [user.id, "Senha redefinida: " + input.id, (/* @__PURE__ */ new Date()).toISOString()] });
+        await tx.execute({ sql: "UPDATE users SET password_hash=? WHERE id=?", args: [pw, user.id] });
+        await tx.execute({ sql: "DELETE FROM sessions WHERE user_id=?", args: [user.id] });
+        await tx.execute({ sql: "INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)", args: [user.id, "Senha de acesso alterada", (/* @__PURE__ */ new Date()).toISOString()] });
       });
       return json(res, 200, { ok: true });
     }
@@ -549,19 +536,6 @@ async function handler(req, res) {
       const input = z2.object({ action: z2.string(), revision: z2.number().int() }).passthrough().parse(await body(req));
       const row = await readState();
       if (row.revision !== input.revision) return json(res, 409, { error: "Outra pessoa alterou os dados. Atualize a p\xE1gina antes de continuar." });
-      if (input.action === "user-role") {
-        const v = z2.object({ id: z2.string(), role: z2.enum(["admin", "viewer"]) }).parse(input);
-        if (v.id === user.id) throw Error("Voc\xEA n\xE3o pode alterar seu pr\xF3prio perfil.");
-        const changed = await transaction(async (tx) => {
-          const result2 = await tx.execute({ sql: "UPDATE workspace SET revision=revision+1 WHERE id=? AND revision=?", args: ["simas", row.revision] });
-          if (!result2.rowsAffected) return false;
-          await tx.execute({ sql: "UPDATE users SET role=? WHERE id=?", args: [v.role, v.id] });
-          await tx.execute({ sql: "INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)", args: [user.id, "Perfil alterado: " + v.id + " \u2192 " + v.role, (/* @__PURE__ */ new Date()).toISOString()] });
-          return true;
-        });
-        if (!changed) return json(res, 409, { error: "Os dados mudaram em outra sess\xE3o. Atualize a p\xE1gina." });
-        return json(res, 200, await snapshot(user));
-      }
       const previous = JSON.parse(row.data);
       const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(/* @__PURE__ */ new Date());
       const state = act(previous, input, today);

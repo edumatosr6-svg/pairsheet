@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
 
-test('Vercel API keeps accounts and schedule state in the database', async () => {
+test('Vercel API protects one access and persists schedule state', async () => {
   await mkdir('work', { recursive: true });
   const dir = await mkdtemp(resolve('work/api-test-'));
   const file = join(dir, 'simas.sqlite').replaceAll('\\', '/');
@@ -45,8 +45,12 @@ test('Vercel API keeps accounts and schedule state in the database', async () =>
     assert.equal((await request('/api/state', 'POST', { action: 'demo', month: '2026-09', revision: 0 })).status, 409);
     assert.equal((await request('/api/auth/logout', 'POST', {})).status, 200);
     assert.equal((await request('/api/state')).status, 401);
-    assert.equal((await request('/api/auth/login', 'POST', { email: 'admin@example.com', password: '123456789012' })).status, 200);
+    assert.equal((await request('/api/auth/login', 'POST', { password: '123456789012' })).status, 200);
     assert.equal((await request('/api/state')).data.revision, 1);
+    assert.equal((await request('/api/users', 'POST', { name: 'Extra', email: 'extra@example.com', password: '123456789012', role: 'admin' })).status, 404);
+    assert.equal((await request('/api/access/password', 'POST', { password: 'abcdefghijklmnop' })).status, 200);
+    assert.equal((await request('/api/state')).status, 401);
+    assert.equal((await request('/api/auth/login', 'POST', { password: 'abcdefghijklmnop' })).status, 200);
   } finally {
     await new Promise(resolve => server.close(resolve));
     closeDatabaseForTests();

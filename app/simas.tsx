@@ -1,5 +1,5 @@
 "use client";
-import {Login,UserAccountForm,PasswordForm} from "./account";
+import { Login, PasswordForm } from "./account";
 import { useState, useEffect } from "react";
 import {
   CalendarDays,
@@ -82,7 +82,6 @@ export default function Simas() {
   const [state, setState] = useState<State>(blankState()),
     [revision, setRevision] = useState(0),
     [user, setUser] = useState<User | null>(null),
-    [users, setUsers] = useState<User[]>([]),
     [loading, setLoading] = useState(true),
     [auth, setAuth] = useState(false),
     [busy, setBusy] = useState(false),
@@ -105,7 +104,6 @@ export default function Simas() {
         state: State;
         revision: number;
         user: User;
-        users: User[];
         error: string;
       };
       if (r.status === 401) {
@@ -124,12 +122,10 @@ export default function Simas() {
     state: State;
     revision: number;
     user: User;
-    users: User[];
   }) {
     setState(d.state);
     setRevision(d.revision);
     setUser(d.user);
-    setUsers(d.users);
     setAuth(false);
   }
   useEffect(() => {
@@ -187,7 +183,6 @@ export default function Simas() {
         state: State;
         revision: number;
         user: User;
-        users: User[];
         error: string;
       };
       if (!r.ok) {
@@ -199,7 +194,6 @@ export default function Simas() {
                 state: State;
                 revision: number;
                 user: User;
-                users: User[];
               },
             );
         }
@@ -453,7 +447,7 @@ export default function Simas() {
               <strong>{user?.name ?? "Minha conta"}</strong>
               <small>{admin ? "Administrador" : "Consulta"}</small>
             </div>
-            <button aria-label="Sair" onClick={async()=>{await fetch("/api/auth/logout",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});setUser(null);setState(blankState());setUsers([]);setAuth(true);setModal(null);}}>
+            <button aria-label="Sair" onClick={async()=>{await fetch("/api/auth/logout",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});setUser(null);setState(blankState());setAuth(true);setModal(null);}}>
               <LogOut size={17} />
             </button>
           </div>
@@ -1274,45 +1268,15 @@ export default function Simas() {
                       />
                     )}
                   </section>
-                  {admin && (
-                    <section className="panel pair-report">
-                      <div className="section-heading">
-                        <div>
-                          <h2>Acessos da equipe</h2><button className="text-button" onClick={()=>setModal({type:"user"})}>Criar acesso <Plus size={16}/></button>
-                          <p>
-                            Administradores gerenciam; usuários de consulta
-                            visualizam.
-                          </p>
-                        </div>
+                  {admin && <section className="panel pair-report">
+                    <div className="section-heading">
+                      <div>
+                        <h2>Acesso ao SIMAS</h2>
+                        <p>Uma senha protege a escala em todos os dispositivos.</p>
                       </div>
-                      {users.map((u) => (
-                        <div className="pair-row" key={u.id}>
-                          <div>
-                            <strong>{u.name}</strong>
-                            <small>{u.email}</small><button className="text-button" onClick={()=>setModal({type:"password",person:u.id})}>Redefinir senha</button>
-                          </div>
-                          <select
-                            aria-label={"Perfil de " + u.name}
-                            value={u.role}
-                            disabled={busy || u.id === user.id}
-                            onChange={(e) =>
-                              save({
-                                action: "user-role",
-                                id: u.id,
-                                role: e.target.value,
-                              })
-                            }
-                          >
-                            <option value="admin">Administrador</option>
-                            <option value="viewer">Consulta</option>
-                          </select>
-                        </div>
-                      ))}
-                      <p className="setting-note">
-                        Crie uma conta para cada pessoa da equipe. O login funciona com e-mail e senha, em qualquer navegador.
-                      </p>
-                    </section>
-                  )}
+                      <button className="button" onClick={() => setModal({ type: "password" })}>Trocar senha</button>
+                    </div>
+                  </section>}
                 </>
               )}
             </>
@@ -1347,8 +1311,7 @@ export default function Simas() {
                   {
                     (
                       {
-                        user: "Criar acesso",
-                        password: "Redefinir senha",
+                        password: "Trocar senha",
                         employee: modal.employee
                           ? "Editar funcionário"
                           : "Novo funcionário",
@@ -1382,8 +1345,7 @@ export default function Simas() {
                 {error}
               </div>
             )}
-            {modal.type === "user" && <UserAccountForm onSuccess={()=>{setModal(null);load();setNotice("Acesso criado com sucesso.");}}/>}
-            {modal.type === "password" && <PasswordForm id={modal.person!} onSuccess={()=>{setModal(null);load();setNotice("Senha atualizada.");}}/>}
+            {modal.type === "password" && <PasswordForm onSuccess={()=>{setModal(null);setUser(null);setAuth(true);setNotice("Senha atualizada. Entre novamente.");}}/>}
             {modal.type === "employee" && (
               <form
                 onSubmit={(e) => {

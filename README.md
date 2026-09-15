@@ -8,9 +8,9 @@ Este repositório inclui `vercel.json` e `server/vercel-api.ts`. `npm run build`
 2. Copie a URL do banco e crie um token de acesso ao banco.
 3. Importe o repositório `edumatosr6-svg/pairsheet` na Vercel.
 4. Nas variáveis de ambiente da Vercel, defina `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` e `SETUP_TOKEN`. Gere o último com `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Não publique os valores no Git.
-5. Faça o deploy e abra o site. Na primeira visita, use o `SETUP_TOKEN` para criar o administrador.
+5. Faça o deploy e abra o site. Na primeira visita, use o `SETUP_TOKEN` para definir o acesso único. Depois, a entrada pede apenas a senha.
 
-O banco Turso persiste contas, sessões e escalas entre deploys. O plano Hobby gratuito da Vercel é limitado a uso pessoal e não comercial; para uso operacional de uma empresa, consulte o plano adequado antes de publicar.
+O banco Turso persiste a senha de acesso, as sessões e as escalas entre deploys. O SIMAS não oferece criação de outras contas. O plano Hobby gratuito da Vercel é limitado a uso pessoal e não comercial; para uso operacional de uma empresa, consulte o plano adequado antes de publicar.
 
 A clean full-stack starter running on [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and Drizzle support.
 

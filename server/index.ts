@@ -29,6 +29,7 @@ type User={id:string;email:string;name:string;role:string};
 const userFields='id,email,name,role';
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const credentials=z.object({email:z.string().trim().email().max(200).transform(x=>x.toLowerCase()),password:z.string().min(12).max(128)});
+const accessPassword=z.object({password:z.string().min(12).max(128)});
 async function passwordHash(password:string){const salt=randomBytes(16).toString('hex');return salt+':'+(await scrypt(password,salt,64) as Buffer).toString('hex');}
 async function passwordMatches(password:string,stored:string){const [salt,value]=stored.split(':');const computed=await scrypt(password,salt,64) as Buffer;const expected=Buffer.from(value,'hex');return expected.length===computed.length&&timingSafeEqual(computed,expected);}
 function cookies(req:IncomingMessage){return Object.fromEntries((req.headers.cookie??'').split(';').map(x=>{const i=x.indexOf('=');return [x.slice(0,i).trim(),x.slice(i+1)];}));}
@@ -37,7 +38,7 @@ function cookie(token:string,maxAge:number){return `simas_session=${token}; Http
 function session(res:ServerResponse,user:User){const token=randomBytes(32).toString('base64url');db.prepare('DELETE FROM sessions WHERE expires<=?').run(Date.now());db.prepare('INSERT INTO sessions VALUES (?,?,?)').run(hash(token),user.id,Date.now()+12*60*60*1000);res.setHeader('Set-Cookie',cookie(token,12*60*60));}
 function json(res:ServerResponse,status:number,data:unknown){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(data));}
 function readState(){return db.prepare('SELECT revision,data FROM workspace WHERE id=?').get('simas') as {revision:number;data:string};}
-function snapshot(user:User){const row=readState();return {state:JSON.parse(row.data),revision:row.revision,user,users:user.role==='admin'?db.prepare(`SELECT ${userFields} FROM users ORDER BY name`).all():[]};}
+function snapshot(user:User){const row=readState();return {state:JSON.parse(row.data),revision:row.revision,user};}
 async function body(req:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of req){size+=chunk.length;if(size>256_000)throw Error('Envie menos informações por vez.');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
 function transaction<T>(fn:()=>T):T{db.exec('BEGIN IMMEDIATE');try{const result=fn();db.exec('COMMIT');return result;}catch(e){db.exec('ROLLBACK');throw e;}}
 function audit(actor:string,message:string){db.prepare('INSERT INTO security_audit(actor,message,at) VALUES (?,?,?)').run(actor,message,new Date().toISOString());}
@@ -55,34 +56,29 @@ const server=createServer(async(req,res)=>{
   if(req.method!=='GET'&&(req.headers.origin!==origin||!req.headers['content-type']?.startsWith('application/json')))return json(res,403,{error:'Origem não permitida.'});
   if(path==='/api/auth/status'&&req.method==='GET')return json(res,200,{needsSetup:!db.prepare('SELECT id FROM users LIMIT 1').get()});
   if(['/api/auth/login','/api/auth/setup'].includes(path)&&req.method==='POST'){
-   const input=await body(req);const parsed=credentials.parse(input);const peer=process.env.TRUST_PROXY==='true'?String(req.headers['x-forwarded-for']??req.socket.remoteAddress).split(',')[0].trim():req.socket.remoteAddress;
-   const key=hash('email:'+parsed.email);if(!allowedAttempt(key)||!allowedAttempt(hash('ip:'+peer)))return json(res,429,{error:'Muitas tentativas. Aguarde 15 minutos e tente novamente.'});
+   const input=await body(req);const parsed=path.endsWith('/setup')?credentials.parse(input):accessPassword.parse(input);const peer=process.env.TRUST_PROXY==='true'?String(req.headers['x-forwarded-for']??req.socket.remoteAddress).split(',')[0].trim():req.socket.remoteAddress;
+   const key=hash('ip:'+peer);if(!allowedAttempt(key))return json(res,429,{error:'Muitas tentativas. Aguarde 15 minutos e tente novamente.'});
    if(path.endsWith('/setup')){
     if(!setupToken||hash(String(input.token??''))!==hash(setupToken))return json(res,403,{error:'Código de instalação inválido.'});
-    const name=z.string().trim().min(2).max(100).parse(input.name);const password=await passwordHash(parsed.password);
-    const user=transaction(()=>{if(db.prepare('SELECT id FROM users LIMIT 1').get())throw Error('A instalação já foi concluída. Entre com sua conta.');const user={id:randomUUID(),email:parsed.email,name,role:'admin'};db.prepare('INSERT INTO users VALUES (?,?,?,?,?)').run(user.id,user.email,user.name,user.role,password);audit(user.id,'Administrador inicial criado');return user;});session(res,user);return json(res,201,{ok:true});
+    const setup=credentials.parse(input);const name=z.string().trim().min(2).max(100).parse(input.name);const password=await passwordHash(setup.password);
+    const user=transaction(()=>{if(db.prepare('SELECT id FROM users LIMIT 1').get())throw Error('A instalação já foi concluída. Entre com sua conta.');const user={id:randomUUID(),email:setup.email,name,role:'admin'};db.prepare('INSERT INTO users VALUES (?,?,?,?,?)').run(user.id,user.email,user.name,user.role,password);audit(user.id,'Acesso inicial criado');return user;});session(res,user);return json(res,201,{ok:true});
    }
-   const user=db.prepare('SELECT * FROM users WHERE email=?').get(parsed.email) as (User&{password_hash:string})|undefined;
+   const user=db.prepare("SELECT * FROM users WHERE role='admin' LIMIT 1").get() as (User&{password_hash:string})|undefined;
    const valid=await passwordMatches(parsed.password,user?.password_hash??'00000000000000000000000000000000:'+('00'.repeat(64)));
-   if(!user||!valid)return json(res,401,{error:'E-mail ou senha incorretos.'});db.prepare('DELETE FROM login_limits WHERE key=?').run(key);session(res,user);return json(res,200,{ok:true});
+   if(!user||!valid)return json(res,401,{error:'Senha incorreta.'});db.prepare('DELETE FROM login_limits WHERE key=?').run(key);session(res,user);return json(res,200,{ok:true});
   }
   const user=identity(req);if(!user)return json(res,401,{error:'Entre na sua conta para acessar o SIMAS.'});
   if(path==='/api/auth/logout'&&req.method==='POST'){db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(cookies(req).simas_session??''));res.setHeader('Set-Cookie',cookie('',0));return json(res,200,{ok:true});}
   if(path==='/api/state'&&req.method==='GET')return json(res,200,snapshot(user));
   if(req.method!=='POST')return json(res,404,{error:'Página não encontrada.'});
   if(user.role!=='admin')return json(res,403,{error:'Somente administradores podem alterar a escala.'});
-  if(path==='/api/users'){
-   const input=await body(req);const parsed=credentials.extend({name:z.string().trim().min(2).max(100),role:z.enum(['admin','viewer'])}).parse(input);const pw=await passwordHash(parsed.password);
-   transaction(()=>{if(db.prepare('SELECT id FROM users WHERE email=?').get(parsed.email))throw Error('Já existe uma conta com esse e-mail.');db.prepare('INSERT INTO users VALUES (?,?,?,?,?)').run(randomUUID(),parsed.email,parsed.name,parsed.role,pw);audit(user.id,'Conta criada: '+parsed.email);});return json(res,201,snapshot(user));
-  }
-  if(path==='/api/users/password'){
-   const input=z.object({id:z.string(),password:z.string().min(12).max(128)}).parse(await body(req));const pw=await passwordHash(input.password);
-   transaction(()=>{if(!db.prepare('SELECT id FROM users WHERE id=?').get(input.id))throw Error('Conta não encontrada.');db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(pw,input.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(input.id);audit(user.id,'Senha redefinida: '+input.id);});return json(res,200,{ok:true});
+  if(path==='/api/access/password'){
+   const input=accessPassword.parse(await body(req));const pw=await passwordHash(input.password);
+   transaction(()=>{db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(pw,user.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);audit(user.id,'Senha de acesso alterada');});return json(res,200,{ok:true});
   }
   if(path==='/api/state'){
    const input=z.object({action:z.string(),revision:z.number().int()}).passthrough().parse(await body(req));
    const row=readState();if(row.revision!==input.revision)return json(res,409,{error:'Outra pessoa alterou os dados. Atualize a página antes de continuar.'});
-   if(input.action==='user-role'){const v=z.object({id:z.string(),role:z.enum(['admin','viewer'])}).parse(input);if(v.id===user.id)throw Error('Você não pode alterar seu próprio perfil.');transaction(()=>{db.prepare('UPDATE users SET role=? WHERE id=?').run(v.role,v.id);audit(user.id,'Perfil alterado: '+v.id+' → '+v.role);db.prepare('UPDATE workspace SET revision=revision+1 WHERE id=?').run('simas');});return json(res,200,snapshot(user));}
    const previous=JSON.parse(row.data) as State;const today=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
    const state=act(previous,input,today);state.audit.unshift({at:new Date().toISOString(),actor:user.name,message:`${labels[input.action]??input.action}${input.date?' · '+input.date:''}${input.month?' · '+input.month:''}`,changes:stateChanges(previous,state)});
    const result=db.prepare('UPDATE workspace SET data=?,revision=revision+1 WHERE id=? AND revision=?').run(JSON.stringify(state),'simas',row.revision);if(!result.changes)return json(res,409,{error:'Os dados mudaram em outra sessão. Atualize a página.'});return json(res,200,snapshot(user));
