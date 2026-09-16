@@ -50,6 +50,12 @@ export const blankState = (): State => ({
 export const pairKey = (a: string, b: string) => [a, b].sort().join("|");
 export const weekday = (date: string) =>
   new Date(date + "T12:00:00Z").getUTCDay();
+export function weekKey(date: string) {
+  const value = new Date(date + "T12:00:00Z");
+  const day = value.getUTCDay();
+  value.setUTCDate(value.getUTCDate() - (day === 0 ? 6 : day - 1));
+  return value.toISOString().slice(0, 10);
+}
 export function dates(month: string) {
   const [y, m] = month.split("-").map(Number);
   return Array.from(
@@ -180,7 +186,7 @@ export function makeDay(date: string): Day {
   };
 }
 /** Pure multistart scheduler. Mandatory constraints are never softened.
- * Availability-weighted balance precedes pair/spacing/history costs.
+ * Weekly targets precede pair/spacing/history costs.
  * rng is injectable; past and confirmed dates are immutable. */
 export function generate(
   input: State,
@@ -210,24 +216,6 @@ export function generate(
   const pool = base.employees.filter(
     (e) => e.status === "ativo" && e.participates,
   );
-  const availability = new Map(
-    pool.map((e) => [
-      e.id,
-      base.days.filter(
-        (d) =>
-          d.date.startsWith(month) && works(d) && available(base, e, d.date),
-      ).length,
-    ]),
-  );
-  const total = [...availability.values()].reduce((a, b) => a + b, 0),
-    slots =
-      base.days.filter((d) => d.date.startsWith(month) && works(d)).length * 2;
-  const targets = new Map(
-    pool.map((e) => [
-      e.id,
-      total ? (slots * (availability.get(e.id) ?? 0)) / total : 0,
-    ]),
-  );
   let best: State | undefined;
   let bestScore: number[] = [];
   for (let attempt = 0; attempt < 80; attempt++) {
@@ -238,17 +226,60 @@ export function generate(
         d.actual = [];
         d.status = "incompleto";
       }
-    const counts = new Map(
-      pool.map((e) => [
-        e.id,
-        s.days.filter(
-          (d) =>
-            d.date.startsWith(month) &&
-            works(d) &&
-            (d.status === "confirmado" ? d.actual : d.assigned).includes(e.id),
-        ).length,
-      ]),
+    const monthCounts = new Map(pool.map((e) => [e.id, 0]));
+    const weekCounts = new Map<string, Map<string, number>>();
+    const usedPairs = new Map<string, Set<string>>();
+    const scheduleWeeks = new Set(
+      s.days
+        .filter((d) => d.date.startsWith(month) && works(d))
+        .map((d) => weekKey(d.date)),
     );
+    for (const d of s.days) {
+      if (!scheduleWeeks.has(weekKey(d.date)) || !works(d) || ids.has(d.date)) continue;
+      const assigned = d.status === "confirmado" ? d.actual : d.assigned;
+      if (assigned.length !== 2) continue;
+      const week = weekKey(d.date);
+      if (!weekCounts.has(week)) weekCounts.set(week, new Map());
+      if (!usedPairs.has(week)) usedPairs.set(week, new Set());
+      for (const id of assigned) {
+        monthCounts.set(id, (monthCounts.get(id) ?? 0) + 1);
+        const counts = weekCounts.get(week)!;
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+      }
+      usedPairs.get(week)!.add(pairKey(assigned[0], assigned[1]));
+    }
+    const weekTargets = new Map<string, Map<string, number>>();
+    const targetTotals = new Map(monthCounts);
+    for (const week of scheduleWeeks) {
+      const days = s.days.filter((d) => works(d) && weekKey(d.date) === week);
+      const candidates = pool.filter((e) =>
+        days.some((d) => available(s, e, d.date)) &&
+        !s.unavailable.some((u) => u.employee === e.id && u.type === "férias" && days.some((d) => u.from <= d.date && u.to >= d.date)),
+      );
+      const targets = new Map(pool.map((e) => [e.id, 0]));
+      if (days.length === 5 && candidates.length === 5) {
+        candidates.forEach((e) => targets.set(e.id, 2));
+      } else if (days.length === 5 && candidates.length === 4) {
+        candidates.forEach((e) => targets.set(e.id, 2));
+        candidates
+          .map((e) => ({ id: e.id, count: targetTotals.get(e.id) ?? 0, random: rng() }))
+          .sort((a, b) => a.count - b.count || a.random - b.random)
+          .slice(0, 2)
+          .forEach((e) => targets.set(e.id, 3));
+      } else if (candidates.length) {
+        const slots = days.length * 2;
+        const baseTarget = Math.floor(slots / candidates.length);
+        candidates.forEach((e) => targets.set(e.id, baseTarget));
+        candidates
+          .map((e) => ({ id: e.id, count: targetTotals.get(e.id) ?? 0, random: rng() }))
+          .sort((a, b) => a.count - b.count || a.random - b.random)
+          .slice(0, slots % candidates.length)
+          .forEach((e) => targets.set(e.id, baseTarget + 1));
+      }
+      weekTargets.set(week, targets);
+      for (const [id, target] of targets)
+        targetTotals.set(id, (targetTotals.get(id) ?? 0) + target);
+    }
     let penalty = 0,
       missing = 0;
     const todo = s.days
@@ -261,19 +292,26 @@ export function generate(
       );
     for (const d of todo) {
       const eligible = pool.filter((e) => available(s, e, d.date));
+      const week = weekKey(d.date);
+      const counts = weekCounts.get(week) ?? new Map<string, number>();
+      weekCounts.set(week, counts);
+      const targets = weekTargets.get(week) ?? new Map<string, number>();
+      const pairs = usedPairs.get(week) ?? new Set<string>();
+      usedPairs.set(week, pairs);
       const options: { ids: string[]; score: number }[] = [];
       for (let i = 0; i < eligible.length; i++)
         for (let j = i + 1; j < eligible.length; j++) {
           const a = eligible[i].id,
             b = eligible[j].id;
           if (!canPair(s, a, b)) continue;
+          if (pairs.has(pairKey(a, b))) continue;
           let balance = 0,
             spacing = 0,
             history = 0,
             repeat = 0;
           for (const id of [a, b]) {
             const n = counts.get(id) ?? 0,
-              t = targets.get(id) ?? 1;
+              t = targets.get(id) ?? 0;
             balance += (n + 1 - t) ** 2 - (n - t) ** 2;
           }
           for (const prev of s.days) {
@@ -304,7 +342,7 @@ export function generate(
           options.push({
             ids: [a, b],
             score:
-              balance * 1000 +
+              balance * 10000 +
               repeat * 15 +
               avoid +
               spacing * 3 +
@@ -321,20 +359,21 @@ export function generate(
           ? "alterado"
           : "programado";
         selected.ids.forEach((id) => counts.set(id, (counts.get(id) ?? 0) + 1));
+        selected.ids.forEach((id) => monthCounts.set(id, (monthCounts.get(id) ?? 0) + 1));
+        pairs.add(pairKey(selected.ids[0], selected.ids[1]));
         penalty += selected.score;
       } else missing++;
     }
-    const vals = pool
-      .filter((e) => (availability.get(e.id) ?? 0) > 0)
-      .map((e) => counts.get(e.id) ?? 0);
-    const equal =
-      new Set([...availability.values()].filter((v) => v > 0)).size <= 1;
-    const imbalance =
-      equal && vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
-    const squared = pool.reduce(
-      (n, e) => n + ((counts.get(e.id) ?? 0) - (targets.get(e.id) ?? 0)) ** 2,
-      0,
-    );
+    let imbalance = 0, squared = 0;
+    for (const [week, targets] of weekTargets) {
+      const counts = weekCounts.get(week) ?? new Map<string, number>();
+      const activeTargets = [...targets.entries()].filter(([, target]) => target > 0);
+      if (activeTargets.length) {
+        const deviations = activeTargets.map(([id, target]) => Math.abs((counts.get(id) ?? 0) - target));
+        imbalance = Math.max(imbalance, ...deviations);
+        squared += activeTargets.reduce((sum, [id, target]) => sum + ((counts.get(id) ?? 0) - target) ** 2, 0);
+      }
+    }
     const score = [missing, imbalance, squared, penalty];
     if (
       !best ||

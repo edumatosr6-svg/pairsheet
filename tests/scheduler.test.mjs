@@ -22,6 +22,7 @@ const {
   makeDay,
   works,
   pairHistory,
+  pairKey,
 } = await import(domainURL);
 const actionsCode = ts
   .transpileModule(
@@ -60,7 +61,7 @@ function rng() {
   return () =>
     (value = (Math.imul(value, 1664525) + 1013904223) >>> 0) / 4294967296;
 }
-test("equal availability distributes with difference at most one", () => {
+test("fills every workable day when enough people are available", () => {
   const s = generate(
     seed(),
     "2026-10",
@@ -69,12 +70,46 @@ test("equal availability distributes with difference at most one", () => {
     "2026-10-01",
     rng(),
   );
-  const counts = summary(s, "2026-10").map((e) => e.planned);
-  assert.ok(Math.max(...counts) - Math.min(...counts) <= 1);
   assert.equal(
     s.days.filter(works).filter((d) => d.assigned.length === 2).length,
     22,
   );
+});
+test("complete week gives five people two turns each without repeating pairs", () => {
+  const s = generate(seed(5), "2026-10", "2026-10-01", "all", "2026-10-01", rng());
+  const week = s.days.filter((d) => d.date >= "2026-10-05" && d.date <= "2026-10-09");
+  const counts = new Map(s.employees.map((e) => [e.id, 0]));
+  const pairs = new Set();
+  for (const day of week) {
+    assert.equal(day.assigned.length, 2);
+    day.assigned.forEach((id) => counts.set(id, counts.get(id) + 1));
+    pairs.add(pairKey(...day.assigned));
+  }
+  assert.deepEqual([...counts.values()], [2, 2, 2, 2, 2]);
+  assert.equal(pairs.size, 5);
+});
+test("vacation week distributes ten turns as three, three, two and two", () => {
+  const s = seed(5);
+  s.unavailable.push({ id: "vacation", employee: "4", type: "férias", from: "2026-10-05", to: "2026-10-09" });
+  const result = generate(s, "2026-10", "2026-10-01", "all", "2026-10-01", rng());
+  const week = result.days.filter((d) => d.date >= "2026-10-05" && d.date <= "2026-10-09");
+  const counts = new Map(result.employees.map((e) => [e.id, 0]));
+  const pairs = new Set();
+  for (const day of week) {
+    assert.equal(day.assigned.length, 2);
+    day.assigned.forEach((id) => counts.set(id, counts.get(id) + 1));
+    pairs.add(pairKey(...day.assigned));
+  }
+  assert.equal(counts.get("4"), 0);
+  assert.deepEqual([0, 1, 2, 3].map((id) => counts.get(String(id))).sort(), [2, 2, 3, 3]);
+  assert.equal(pairs.size, 5);
+});
+test("does not repeat a pair when a week crosses two months", () => {
+  const november = generate(seed(5), "2026-11", "2026-11-01", "all", "2026-11-01", rng());
+  const result = generate(november, "2026-12", "2026-12-01", "all", "2026-12-01", rng());
+  const week = result.days.filter((d) => d.date >= "2026-11-30" && d.date <= "2026-12-04");
+  assert.equal(week.length, 5);
+  assert.equal(new Set(week.map((d) => pairKey(...d.assigned))).size, 5);
 });
 test("mandatory constraints, entry dates, recurring days and blocked pairs", () => {
   const s = seed();

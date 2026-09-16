@@ -35,6 +35,8 @@ import {
   blankState,
   dates,
   weekday,
+  weekKey,
+  available,
   summary,
   pairHistory,
   substitutes,
@@ -229,10 +231,17 @@ export default function Simas() {
     done = workDays.filter((d) => d.status === "confirmado"),
     issues = conflicts(state).filter((c) => c.date.startsWith(month));
   const active = stats.filter((e) => e.status === "ativo" && e.participates),
-    numbers = active.map((e) => e.planned),
+    weekAnchor = month === today.slice(0, 7) ? today : dates(month).find((date) => weekday(date) === 1) ?? month + "-01",
+    selectedWeek = weekKey(weekAnchor),
+    selectedWeekDays = workDays.filter((d) => weekKey(d.date) === selectedWeek),
+    weeklyStats = active
+      .filter((e) => selectedWeekDays.some((d) => available(state, e, d.date)))
+      .map((e) => ({ ...e, planned: selectedWeekDays.filter((d) => d.assigned.includes(e.id)).length })),
+    numbers = weeklyStats.map((e) => e.planned),
+    weeklyFilled = selectedWeekDays.filter((d) => d.assigned.length === 2),
     spread = numbers.length ? Math.max(...numbers) - Math.min(...numbers) : 0;
   const balance =
-    numbers.length && filled.length
+    numbers.length && weeklyFilled.length
       ? Math.max(
           0,
           Math.round(
@@ -588,11 +597,11 @@ export default function Simas() {
                     foot={`${done.length} dias com presença confirmada`}
                   />
                   <Stat
-                    title="Equilíbrio da escala"
-                    value={filled.length ? balance + "%" : "—"}
+                    title="Equilíbrio da semana"
+                    value={weeklyFilled.length ? balance + "%" : "—"}
                     icon={<ChartNoAxesCombined size={19} />}
                     foot={
-                      filled.length
+                      weeklyFilled.length
                         ? `Diferença de ${spread} participação${spread === 1 ? "" : "ões"}`
                         : "Gere a escala para acompanhar"
                     }
@@ -897,7 +906,7 @@ export default function Simas() {
                       </button>
                     </div>
                   )}
-                  <Distribution stats={stats} avatar={avatar} />
+                  <Distribution stats={weeklyStats} avatar={avatar} />
                 </>
               )}
               {tab === "Início" && (
@@ -1533,8 +1542,10 @@ export default function Simas() {
                 }}
               >
                 <p className="modal-description">
-                  A distribuição considera disponibilidade, participações e
-                  histórico de duplas.
+                  A distribuição prioriza a justiça em cada semana: duas
+                  participações por pessoa e nenhuma dupla repetida. Quando
+                  uma pessoa está de férias, duas fazem três participações e
+                  duas fazem duas.
                 </p>
                 <Field label="Mês da escala">
                   <input
@@ -1987,7 +1998,7 @@ function Distribution({
       <div className="section-heading">
         <div>
           <h2>Distribuição de participações</h2>
-          <p>Uma visão rápida do equilíbrio neste mês.</p>
+          <p>Uma visão rápida do equilíbrio na semana.</p>
         </div>
         <span className="badge">Previstas</span>
       </div>
